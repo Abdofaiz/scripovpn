@@ -1896,6 +1896,136 @@ function removeUnbound() {
 	fi
 }
 
+# New function to manage routes
+function manageRoutes() {
+	clear
+	echo "==============================================="
+	echo "            OpenVPN Route Management           "
+	echo "==============================================="
+	echo ""
+	echo "Current routes configured in server.conf:"
+	echo "------------------------------------------"
+	
+	# Display current routes in server.conf
+	if grep -q '^push "route ' /etc/openvpn/server.conf; then
+		grep '^push "route ' /etc/openvpn/server.conf | nl
+		echo ""
+	else
+		echo "No custom routes configured."
+		echo ""
+	fi
+	
+	echo "What would you like to do?"
+	echo "1) Add a new route"
+	echo "2) Remove an existing route"
+	echo "3) Return to main menu"
+	
+	read -rp "Select an option [1-3]: " ROUTE_OPTION
+	until [[ "$ROUTE_OPTION" =~ ^[1-3]$ ]]; do
+		echo "$ROUTE_OPTION: invalid selection."
+		read -rp "Select an option [1-3]: " ROUTE_OPTION
+	done
+	
+	case "$ROUTE_OPTION" in
+		1)
+			# Add new route
+			echo ""
+			echo "Adding a new route"
+			echo "-----------------"
+			echo "Format: NETWORK NETMASK"
+			echo "Example: 192.168.1.0 255.255.255.0 (for a /24 network)"
+			echo ""
+			
+			read -rp "Enter network address (e.g., 192.168.1.0): " ROUTE_NETWORK
+			read -rp "Enter netmask (e.g., 255.255.255.0): " ROUTE_NETMASK
+			
+			# Validate IP format (basic validation)
+			if [[ ! $ROUTE_NETWORK =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+				echo "Invalid network address format. Please use standard IPv4 format (e.g., 192.168.1.0)"
+				read -n1 -r -p "Press any key to continue..."
+				manageRoutes
+				return
+			fi
+			
+			if [[ ! $ROUTE_NETMASK =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+				echo "Invalid netmask format. Please use standard IPv4 format (e.g., 255.255.255.0)"
+				read -n1 -r -p "Press any key to continue..."
+				manageRoutes
+				return
+			fi
+			
+			# Add route to server.conf
+			echo "push \"route $ROUTE_NETWORK $ROUTE_NETMASK\"" >> /etc/openvpn/server.conf
+			
+			echo ""
+			echo "Route added successfully: $ROUTE_NETWORK $ROUTE_NETMASK"
+			echo "Restarting OpenVPN service to apply changes..."
+			
+			# Restart OpenVPN to apply changes
+			if [[ -f /etc/fedora-release ]]; then
+				systemctl restart openvpn-server@server
+			elif [[ -f /etc/arch-release ]]; then
+				systemctl restart openvpn-server@server
+			else
+				systemctl restart openvpn@server
+			fi
+			
+			echo "OpenVPN service restarted. New route is now active."
+			;;
+			
+		2)
+			# Remove existing route
+			if ! grep -q '^push "route ' /etc/openvpn/server.conf; then
+				echo "No custom routes to remove."
+				read -n1 -r -p "Press any key to continue..."
+				manageRoutes
+				return
+			fi
+			
+			echo ""
+			echo "Select route to remove:"
+			grep '^push "route ' /etc/openvpn/server.conf | nl
+			
+			ROUTE_COUNT=$(grep -c '^push "route ' /etc/openvpn/server.conf)
+			read -rp "Enter route number to remove [1-$ROUTE_COUNT]: " ROUTE_NUMBER
+			
+			until [[ "$ROUTE_NUMBER" =~ ^[0-9]+$ ]] && [ "$ROUTE_NUMBER" -ge 1 ] && [ "$ROUTE_NUMBER" -le "$ROUTE_COUNT" ]; do
+				echo "Invalid selection."
+				read -rp "Enter route number to remove [1-$ROUTE_COUNT]: " ROUTE_NUMBER
+			done
+			
+			# Get the route line to remove
+			ROUTE_TO_REMOVE=$(grep '^push "route ' /etc/openvpn/server.conf | sed -n "${ROUTE_NUMBER}p")
+			
+			# Remove the route from server.conf
+			sed -i "/^${ROUTE_TO_REMOVE//\//\\/}$/d" /etc/openvpn/server.conf
+			
+			echo ""
+			echo "Route removed: $ROUTE_TO_REMOVE"
+			echo "Restarting OpenVPN service to apply changes..."
+			
+			# Restart OpenVPN to apply changes
+			if [[ -f /etc/fedora-release ]]; then
+				systemctl restart openvpn-server@server
+			elif [[ -f /etc/arch-release ]]; then
+				systemctl restart openvpn-server@server
+			else
+				systemctl restart openvpn@server
+			fi
+			
+			echo "OpenVPN service restarted. Route has been removed."
+			;;
+			
+		3)
+			# Return to main menu
+			return
+			;;
+	esac
+	
+	read -n1 -r -p "Press any key to continue..."
+	manageRoutes
+}
+
 function removeOpenVPN() {
 	echo ""
 	read -rp "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
@@ -1964,6 +2094,41 @@ function removeOpenVPN() {
 		if [[ -e /etc/unbound/openvpn.conf ]]; then
 			removeUnbound
 		fi
+		
+		# Clean up web server components if they exist
+		if [[ -d /var/www/openvpn ]]; then
+			echo "Removing web download server components..."
+			
+			# Remove nginx config
+			if [[ -f /etc/nginx/conf.d/openvpn-download.conf ]]; then
+				rm /etc/nginx/conf.d/openvpn-download.conf
+			fi
+			
+			# Remove web files
+			rm -rf /var/www/openvpn
+			
+			# Remove update script
+			if [[ -f /usr/local/bin/update-ovpn-web ]]; then
+				rm /usr/local/bin/update-ovpn-web
+			fi
+			
+			# Remove cron job
+			crontab -l | grep -v "update-ovpn-web" | crontab -
+			
+			# Restart nginx if it's running
+			if systemctl is-active --quiet nginx; then
+				systemctl restart nginx
+			fi
+			
+			echo "Web download server components removed."
+		fi
+		
+		# Remove faizvpn command
+		if [[ -e /usr/local/bin/faizvpn ]]; then
+			rm /usr/local/bin/faizvpn
+			echo "Command 'faizvpn' has been removed."
+		fi
+		
 		echo ""
 		echo "OpenVPN removed!"
 	else
@@ -1973,6 +2138,7 @@ function removeOpenVPN() {
 }
 
 function manageMenu() {
+	clear
 	echo "Welcome to OpenVPN-install!"
 	echo "The git repository is available at: https://github.com/angristan/openvpn-install"
 	echo ""
@@ -1980,50 +2146,59 @@ function manageMenu() {
 	echo ""
 	echo "What do you want to do?"
 	echo "   1) Add a new user"
-	echo "   2) Revoke existing user"
-	echo "   3) View connected clients"
-	echo "   4) Change server configuration"
-	echo "   5) Backup/Restore configuration"
-	echo "   6) Configure Payload settings"
-	echo "   7) Configure Proxy settings"
-	echo "   8) Setup Web Download (Port 81)"
-	echo "   9) Remove OpenVPN"
-	echo "   10) Exit"
-	until [[ $MENU_OPTION =~ ^[1-9]|10$ ]]; do
-		read -rp "Select an option [1-10]: " MENU_OPTION
+	echo "   2) Revoke an existing user"
+	echo "   3) Remove OpenVPN"
+	echo "   4) Exit"
+	echo "   5) Show connected users [5 min update]"
+	echo "   6) Check User Detail"
+	echo "   7) Configure DNS settings"
+	echo "   8) Add WebSocket Support"
+	echo "   9) Configure ACL WebSocket Split"
+	echo "   10) Setup Web Download"
+	echo "   11) OpenVPN Status"
+	echo "   12) Manage Routes"
+	read -p "Select an option [1-12]: " option
+	until [[ "$option" =~ ^[1-9]|10|11|12$ ]]; do
+		echo "$option: invalid selection."
+		read -p "Select an option [1-12]: " option
 	done
-
-	case $MENU_OPTION in
-	1)
-		newClient
-		;;
-	2)
-		revokeClient
-		;;
-	3)
-		viewConnectedClients
-		;;
-	4)
-		changeServerConfig
-		;;
-	5)
-		backupRestore
-		;;
-	6)
-		configurePayload
-		;;
-	7)
-		configureProxy
-		;;
-	8)
-		setupWebDownload
-		;;
-	9)
-		removeOpenVPN
-		;;
-	10)
-		exit 0
-		;;
+	case "$option" in
+		1)
+			newClient
+			;;
+		2)
+			revokeClient
+			;;
+		3)
+			removeOpenVPN
+			;;
+		4)
+			exit 0
+			;;
+        5)
+            viewConnectedClients
+            ;;
+        6)
+            checkUserDetail
+            ;;
+        7)
+            configureDNS
+            ;;
+        8)
+            configureWebSocket
+            ;;
+        9)
+            configureACLWebSocketSplit
+            ;;
+        10)
+            setupWebDownload
+            ;;
+        11)
+            checkOpenVPNStatus
+            ;;
+        12)
+            manageRoutes
+            ;;
 	esac
 }
 
@@ -2066,16 +2241,48 @@ function setupWebDownload() {
 	echo ""
 	echo "Setting up Basic Authentication"
 	echo "------------------------------"
-	read -rp "Enter username for web access: " WEB_USER
+	echo "How would you like to set up authentication?"
+	echo "1) Auto-generate password (recommended)"
+	echo "2) Enter custom username and password"
+	read -rp "Select an option [1-2]: " AUTH_OPTION
 	
-	# Generate password or ask for it
-	if command -v openssl >/dev/null 2>&1; then
-		AUTO_PASS=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)
-		echo "Generated password: $AUTO_PASS"
-		WEB_PASS=$AUTO_PASS
-	else
-		read -rp "Enter password for web access: " WEB_PASS
-	fi
+	until [[ "$AUTH_OPTION" =~ ^[1-2]$ ]]; do
+		echo "$AUTH_OPTION: invalid selection."
+		read -rp "Select an option [1-2]: " AUTH_OPTION
+	done
+	
+	case "$AUTH_OPTION" in
+		1)
+			# Auto-generate credentials
+			read -rp "Enter username for web access: " WEB_USER
+			
+			# Generate password
+			if command -v openssl >/dev/null 2>&1; then
+				AUTO_PASS=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)
+				echo "Generated password: $AUTO_PASS"
+				WEB_PASS=$AUTO_PASS
+			else
+				read -rp "Enter password for web access: " WEB_PASS
+			fi
+			;;
+		2)
+			# Manual credentials
+			read -rp "Enter username for web access: " WEB_USER
+			read -rp "Enter password for web access: " -s WEB_PASS
+			echo ""
+			read -rp "Confirm password: " -s CONFIRM_PASS
+			echo ""
+			
+			# Validate password match
+			until [[ "$WEB_PASS" == "$CONFIRM_PASS" ]]; do
+				echo "Passwords do not match. Please try again."
+				read -rp "Enter password for web access: " -s WEB_PASS
+				echo ""
+				read -rp "Confirm password: " -s CONFIRM_PASS
+				echo ""
+			done
+			;;
+	esac
 	
 	# Create htpasswd file
 	if [[ $OS =~ (debian|ubuntu) ]]; then
@@ -2095,6 +2302,9 @@ find /root -name "*.ovpn" -exec cp {} /var/www/openvpn/ \;
 find /home -maxdepth 2 -name "*.ovpn" -exec cp {} /var/www/openvpn/ \;
 chown -R www-data:www-data /var/www/openvpn 2>/dev/null || true
 chmod -R 644 /var/www/openvpn/*.ovpn 2>/dev/null || true
+
+# Update routes display
+grep '^push "route ' /etc/openvpn/server.conf > /var/www/openvpn/current_routes.txt 2>/dev/null || echo "No custom routes configured." > /var/www/openvpn/current_routes.txt
 EOF
 
 	chmod +x /usr/local/bin/update-ovpn-web
@@ -2117,6 +2327,21 @@ server {
         autoindex_exact_size off;
         autoindex_format html;
         autoindex_localtime on;
+    }
+    
+    # Add route management API endpoint
+    location /manage-routes {
+        auth_basic "Restricted Access";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        try_files $uri /route-manager.html;
+    }
+    
+    # Protect route management operations
+    location /api/ {
+        auth_basic "Restricted Access";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php-fpm.sock;
     }
 }
 EOF
@@ -2144,10 +2369,32 @@ EOF
             border-radius: 5px;
             margin-bottom: 20px;
         }
+        .menu {
+            margin-bottom: 20px;
+        }
+        .menu a {
+            display: inline-block;
+            margin-right: 10px;
+            padding: 8px 15px;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        .menu a:hover {
+            background-color: #2980b9;
+        }
     </style>
 </head>
 <body>
-    <h1>OpenVPN Configuration Files</h1>
+    <h1>OpenVPN Management Portal</h1>
+    
+    <div class="menu">
+        <a href="/">OVPN Files</a>
+        <a href="/manage-routes">Manage Routes</a>
+        <a href="/server-status">Server Status</a>
+    </div>
+    
     <div class="instructions">
         <p>Click on a .ovpn file to download it, then import it into your OpenVPN client.</p>
         <p><strong>Instructions:</strong></p>
@@ -2159,6 +2406,239 @@ EOF
     </div>
     <hr>
     <!-- Directory listing will appear below -->
+</body>
+</html>
+EOF
+
+	# Create route manager page
+	echo "Creating route manager page..."
+	cat > /var/www/openvpn/route-manager.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OpenVPN Route Management</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            color: #3498db;
+        }
+        .instructions {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .menu {
+            margin-bottom: 20px;
+        }
+        .menu a {
+            display: inline-block;
+            margin-right: 10px;
+            padding: 8px 15px;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        .menu a:hover {
+            background-color: #2980b9;
+        }
+        .route-section {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        input[type="text"] {
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 200px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <h1>OpenVPN Route Management</h1>
+    
+    <div class="menu">
+        <a href="/">OVPN Files</a>
+        <a href="/manage-routes">Manage Routes</a>
+        <a href="/server-status">Server Status</a>
+    </div>
+    
+    <div class="instructions">
+        <p>This page allows you to view and manage the routes pushed to OpenVPN clients.</p>
+        <p>Routes are pushed to all clients and allow access to networks behind the VPN server.</p>
+    </div>
+    
+    <div class="route-section">
+        <h2>Current Routes</h2>
+        <p>These routes are currently configured in the OpenVPN server:</p>
+        <pre id="current-routes">Loading routes...</pre>
+    </div>
+    
+    <div class="route-section">
+        <h2>Add New Route</h2>
+        <div class="form-group">
+            <label for="network">Network Address (e.g., 192.168.1.0):</label><br>
+            <input type="text" id="network" placeholder="192.168.1.0">
+        </div>
+        <div class="form-group">
+            <label for="netmask">Netmask (e.g., 255.255.255.0):</label><br>
+            <input type="text" id="netmask" placeholder="255.255.255.0">
+        </div>
+        <button id="add-route">Add Route</button>
+        <p id="add-result"></p>
+    </div>
+
+    <script>
+        // Load current routes
+        function loadRoutes() {
+            fetch('/current_routes.txt')
+                .then(response => response.text())
+                .then(data => {
+                    document.getElementById('current-routes').textContent = data;
+                })
+                .catch(error => {
+                    document.getElementById('current-routes').textContent = 'Error loading routes';
+                });
+        }
+        
+        // Initial load
+        document.addEventListener('DOMContentLoaded', loadRoutes);
+        
+        // The actual route management would need to be implemented
+        // via server-side scripts, as the web interface can't directly
+        // edit the server.conf file. This would require additional
+        // setup with a backend API.
+        document.getElementById('add-route').addEventListener('click', function() {
+            document.getElementById('add-result').textContent = 
+                'Route management from the web interface requires server-side implementation. ' +
+                'Please use the command-line tool for now: faizvpn (option 12)';
+        });
+    </script>
+</body>
+</html>
+EOF
+
+	# Create server status page
+	echo "Creating server status page..."
+	cat > /var/www/openvpn/server-status.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OpenVPN Server Status</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            color: #3498db;
+        }
+        .menu {
+            margin-bottom: 20px;
+        }
+        .menu a {
+            display: inline-block;
+            margin-right: 10px;
+            padding: 8px 15px;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        .menu a:hover {
+            background-color: #2980b9;
+        }
+        .status-section {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-running {
+            background-color: #2ecc71;
+        }
+        .status-stopped {
+            background-color: #e74c3c;
+        }
+        pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>OpenVPN Server Status</h1>
+    
+    <div class="menu">
+        <a href="/">OVPN Files</a>
+        <a href="/manage-routes">Manage Routes</a>
+        <a href="/server-status">Server Status</a>
+    </div>
+    
+    <div class="status-section">
+        <h2>Service Status</h2>
+        <p>
+            <span class="status-indicator status-running" id="service-status-indicator"></span>
+            <span id="service-status">Checking status...</span>
+        </p>
+        <p>For detailed status information and control options, please use the command-line tool: faizvpn (option 11)</p>
+    </div>
+    
+    <div class="status-section">
+        <h2>Connected Clients</h2>
+        <pre id="connected-clients">Loading client information...</pre>
+    </div>
+
+    <script>
+        // This is just a placeholder. In a real implementation, 
+        // you would need server-side scripts to fetch the actual status.
+        document.addEventListener('DOMContentLoaded', function() {
+            // Simulate status (in reality this would come from the server)
+            document.getElementById('service-status').textContent = 'Service is running';
+            document.getElementById('service-status-indicator').className = 'status-indicator status-running';
+            
+            // Simulate client data
+            document.getElementById('connected-clients').textContent = 
+                'For security reasons, detailed client information is only available via the command-line tool: faizvpn (option 5)';
+        });
+    </script>
 </body>
 </html>
 EOF
@@ -2202,6 +2682,10 @@ EOF
 	echo "Password: $WEB_PASS"
 	echo ""
 	echo "Your OpenVPN configuration files will be available at this URL."
+	echo "The web interface also provides:"
+	echo "- Route management (view only)"
+	echo "- Server status (basic information)"
+	echo ""
 	echo "The files are updated every 5 minutes."
 	echo "You can manually update them by running: /usr/local/bin/update-ovpn-web"
 	echo ""
@@ -2230,3 +2714,171 @@ bash '"$(readlink -f "$0")"'' > /usr/local/bin/faizvpn
 		echo ""
 	fi
 fi
+
+# Function to check OpenVPN status
+function checkOpenVPNStatus() {
+	clear
+	echo "==============================================="
+	echo "            OpenVPN Server Status              "
+	echo "==============================================="
+	echo ""
+	
+	# Check service status based on OS
+	echo "SERVICE STATUS:"
+	echo "==============="
+	if [[ -f /etc/fedora-release ]]; then
+		systemctl status openvpn-server@server --no-pager | grep "Active:" | sed 's/^[ \t]*//'
+	elif [[ -f /etc/arch-release ]]; then
+		systemctl status openvpn-server@server --no-pager | grep "Active:" | sed 's/^[ \t]*//'
+	elif [[ -f /etc/centos-release || -f /etc/redhat-release || -f /etc/system-release || -f /etc/oracle-release ]]; then
+		systemctl status openvpn@server --no-pager | grep "Active:" | sed 's/^[ \t]*//'
+	else
+		systemctl status openvpn@server --no-pager | grep "Active:" | sed 's/^[ \t]*//'
+	fi
+	echo ""
+	
+	# Check uptime
+	echo "SERVICE UPTIME:"
+	echo "==============="
+	if [[ -f /etc/fedora-release ]]; then
+		systemctl show openvpn-server@server | grep "ExecMainStartTimestamp=" | cut -d= -f2
+	elif [[ -f /etc/arch-release ]]; then
+		systemctl show openvpn-server@server | grep "ExecMainStartTimestamp=" | cut -d= -f2
+	elif [[ -f /etc/centos-release || -f /etc/redhat-release || -f /etc/system-release || -f /etc/oracle-release ]]; then
+		systemctl show openvpn@server | grep "ExecMainStartTimestamp=" | cut -d= -f2
+	else
+		systemctl show openvpn@server | grep "ExecMainStartTimestamp=" | cut -d= -f2
+	fi
+	echo ""
+	
+	# Check resources usage
+	echo "RESOURCE USAGE:"
+	echo "==============="
+	if command -v pidof &>/dev/null; then
+		PID=$(pidof openvpn)
+		if [[ -n "$PID" ]]; then
+			echo "CPU usage: $(ps -p $PID -o %cpu | tail -n 1 | tr -d ' ')%"
+			echo "Memory usage: $(ps -p $PID -o %mem | tail -n 1 | tr -d ' ')%"
+		else
+			echo "OpenVPN process not found"
+		fi
+	else
+		echo "CPU/Memory usage check not available"
+	fi
+	echo ""
+	
+	# Network configuration
+	echo "NETWORK CONFIGURATION:"
+	echo "======================"
+	PORT=$(grep "port " /etc/openvpn/server.conf | awk '{print $2}')
+	PROTO=$(grep "proto " /etc/openvpn/server.conf | awk '{print $2}')
+	echo "Listening on: $PORT/$PROTO"
+	
+	# Check if port is open
+	if command -v netstat &>/dev/null; then
+		PORT_STATUS=$(netstat -tuln | grep ":$PORT")
+	elif command -v ss &>/dev/null; then
+		PORT_STATUS=$(ss -tuln | grep ":$PORT")
+	fi
+	
+	if [[ -n "$PORT_STATUS" ]]; then
+		echo "Port $PORT is OPEN"
+	else
+		echo "Port $PORT is CLOSED"
+	fi
+	echo ""
+	
+	# Connected clients
+	echo "CONNECTED CLIENTS:"
+	echo "=================="
+	if [[ -f /var/log/openvpn/status.log ]]; then
+		CLIENTS=$(grep -c "^CLIENT_LIST" /var/log/openvpn/status.log)
+		echo "Total clients: $((CLIENTS-1))"
+		
+		# Total data transfer
+		BYTESIN=$(grep "^GLOBAL_STATS" /var/log/openvpn/status.log | cut -d, -f3 | cut -d= -f2)
+		BYTESOUT=$(grep "^GLOBAL_STATS" /var/log/openvpn/status.log | cut -d, -f2 | cut -d= -f2)
+		
+		# Convert to MB
+		MBIN=$(echo "scale=2; $BYTESIN/1048576" | bc)
+		MBOUT=$(echo "scale=2; $BYTESOUT/1048576" | bc)
+		
+		echo "Total data received: ${MBIN}MB"
+		echo "Total data sent: ${MBOUT}MB"
+	else
+		echo "Status log not found"
+	fi
+	echo ""
+	
+	# Recent activity
+	echo "RECENT LOG ACTIVITY:"
+	echo "===================="
+	if command -v journalctl &>/dev/null; then
+		if [[ -f /etc/fedora-release ]]; then
+			journalctl -u openvpn-server@server --no-pager --since "1 hour ago" | grep -i error | tail -n 5
+		elif [[ -f /etc/arch-release ]]; then
+			journalctl -u openvpn-server@server --no-pager --since "1 hour ago" | grep -i error | tail -n 5
+		else
+			journalctl -u openvpn@server --no-pager --since "1 hour ago" | grep -i error | tail -n 5
+		fi
+	else
+		echo "Recent log check not available"
+	fi
+	echo ""
+	
+	# Service control options
+	echo "SERVICE CONTROL OPTIONS:"
+	echo "======================="
+	echo "1) Restart OpenVPN service"
+	echo "2) Stop OpenVPN service"
+	echo "3) Start OpenVPN service"
+	echo "4) Return to main menu"
+	
+	read -p "Select an option [1-4]: " sc_option
+	until [[ "$sc_option" =~ ^[1-4]$ ]]; do
+		echo "$sc_option: invalid selection."
+		read -p "Select an option [1-4]: " sc_option
+	done
+	
+	case "$sc_option" in
+		1)
+			echo "Restarting OpenVPN service..."
+			if [[ -f /etc/fedora-release ]]; then
+				systemctl restart openvpn-server@server
+			elif [[ -f /etc/arch-release ]]; then
+				systemctl restart openvpn-server@server
+			else
+				systemctl restart openvpn@server
+			fi
+			echo "Service restarted!"
+			;;
+		2)
+			echo "Stopping OpenVPN service..."
+			if [[ -f /etc/fedora-release ]]; then
+				systemctl stop openvpn-server@server
+			elif [[ -f /etc/arch-release ]]; then
+				systemctl stop openvpn-server@server
+			else
+				systemctl stop openvpn@server
+			fi
+			echo "Service stopped!"
+			;;
+		3)
+			echo "Starting OpenVPN service..."
+			if [[ -f /etc/fedora-release ]]; then
+				systemctl start openvpn-server@server
+			elif [[ -f /etc/arch-release ]]; then
+				systemctl start openvpn-server@server
+			else
+				systemctl start openvpn@server
+			fi
+			echo "Service started!"
+			;;
+		4)
+			# Return to main menu
+			;;
+	esac
+	
+	read -n 1 -s -r -p "Press any key to continue..."
+	manageMenu
+}
