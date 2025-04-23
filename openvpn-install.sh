@@ -2178,6 +2178,40 @@ function removeOpenVPN() {
 	fi
 }
 
+# Function to reinstall the faizvpn command
+function reinstallFaizvpnCommand() {
+	echo ""
+	echo "Reinstalling faizvpn command..."
+	
+	# First, find where the openvpn-install.sh script is located
+	SCRIPT_PATH=$(readlink -f $(which openvpn-install.sh 2>/dev/null || echo "$0"))
+	
+	# Remove existing command if it exists
+	if [[ -e /usr/local/bin/faizvpn ]]; then
+		rm /usr/local/bin/faizvpn
+	fi
+	
+	# Create the faizvpn command with absolute path to script
+	cat > /usr/local/bin/faizvpn << EOF
+#!/bin/bash
+if [[ \$EUID -ne 0 ]]; then
+    echo "This script must be run as root"
+    exit 1
+fi
+bash "$SCRIPT_PATH"
+EOF
+	
+	# Make it executable
+	chmod +x /usr/local/bin/faizvpn
+	
+	echo "Command 'faizvpn' has been reinstalled successfully."
+	echo "Command located at: $(readlink -f /usr/local/bin/faizvpn)"
+	echo "Script path: $SCRIPT_PATH"
+	echo ""
+	read -n1 -r -p "Press any key to continue..."
+	manageMenu
+}
+
 function manageMenu() {
 	clear
 	echo "Welcome to OpenVPN-install!"
@@ -2198,10 +2232,12 @@ function manageMenu() {
 	echo "   10) Setup Web Download"
 	echo "   11) OpenVPN Status"
 	echo "   12) Manage Routes"
-	read -p "Select an option [1-12]: " option
-	until [[ "$option" =~ ^[1-9]|10|11|12$ ]]; do
+	echo "   13) Fix Port 53 Issues"
+	echo "   14) Reinstall faizvpn command"
+	read -p "Select an option [1-14]: " option
+	until [[ "$option" =~ ^[1-9]|10|11|12|13|14$ ]]; do
 		echo "$option: invalid selection."
-		read -p "Select an option [1-12]: " option
+		read -p "Select an option [1-14]: " option
 	done
 	case "$option" in
 		1)
@@ -2212,6 +2248,7 @@ function manageMenu() {
 			;;
 		3)
 			removeOpenVPN
+			
 			;;
 		4)
 			exit 0
@@ -2239,6 +2276,12 @@ function manageMenu() {
             ;;
         12)
             manageRoutes
+            ;;
+        13)
+            fixPort53Issues
+            ;;
+        14)
+            reinstallFaizvpnCommand
             ;;
 	esac
 }
@@ -2743,15 +2786,25 @@ else
 	installOpenVPN
 	# Create faizvpn command for easy access to management menu
 	if [[ ! -e /usr/local/bin/faizvpn ]]; then
-		echo '#!/bin/bash
-if [[ $EUID -ne 0 ]]; then
+		# First, find where the openvpn-install.sh script is located
+		SCRIPT_PATH=$(readlink -f $(which openvpn-install.sh 2>/dev/null || echo "$0"))
+
+		# Create the faizvpn command with absolute path to script
+		cat > /usr/local/bin/faizvpn << EOF
+#!/bin/bash
+if [[ \$EUID -ne 0 ]]; then
     echo "This script must be run as root"
     exit 1
 fi
-bash '"$(readlink -f "$0")"'' > /usr/local/bin/faizvpn
+bash "$SCRIPT_PATH"
+EOF
+
+		# Make it executable
 		chmod +x /usr/local/bin/faizvpn
+		
 		echo ""
 		echo "Command 'faizvpn' has been created. You can now use this command anytime to access the OpenVPN management menu."
+		echo "Command located at: $(readlink -f /usr/local/bin/faizvpn)"
 		echo ""
 	fi
 fi
@@ -2922,4 +2975,201 @@ function checkOpenVPNStatus() {
 	
 	read -n 1 -s -r -p "Press any key to continue..."
 	manageMenu
+}
+
+# Function to check and fix port 53 issues
+function fixPort53Issues() {
+    clear
+    echo "==============================================="
+    echo "          OpenVPN Port 53 Troubleshooter       "
+    echo "==============================================="
+    echo ""
+    
+    # Check if OpenVPN is using port 53
+    CURRENT_PORT=$(grep "^port " /etc/openvpn/server.conf | cut -d " " -f 2)
+    CURRENT_PROTO=$(grep "^proto " /etc/openvpn/server.conf | cut -d " " -f 2)
+    
+    if [[ "$CURRENT_PORT" != "53" ]]; then
+        echo "OpenVPN is not currently configured to use port 53."
+        echo "Current port is: $CURRENT_PORT/$CURRENT_PROTO"
+        
+        read -rp "Would you like to switch to port 53? [y/n]: " -e SWITCH_TO_53
+        if [[ "$SWITCH_TO_53" != "y" ]]; then
+            return
+        fi
+    else
+        echo "OpenVPN is configured to use port 53/$CURRENT_PROTO"
+    fi
+    
+    echo ""
+    echo "Checking for common port 53 issues..."
+    
+    # Check 1: See if systemd-resolved is using port 53
+    if pgrep systemd-resolved >/dev/null; then
+        echo "systemd-resolved detected - this service might be using port 53."
+        echo "Checking systemd-resolved configuration..."
+        
+        if grep -q "DNSStubListener=yes" /etc/systemd/resolved.conf 2>/dev/null; then
+            echo "systemd-resolved is configured to use port 53."
+            echo "Modifying configuration to free up port 53..."
+            
+            # Backup the file
+            cp /etc/systemd/resolved.conf /etc/systemd/resolved.conf.backup
+            
+            # Update the configuration to disable DNSStubListener
+            sed -i 's/^#*DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
+            
+            if ! grep -q "DNSStubListener=" /etc/systemd/resolved.conf; then
+                echo "DNSStubListener=no" >> /etc/systemd/resolved.conf
+            fi
+            
+            # Restart systemd-resolved
+            systemctl restart systemd-resolved
+            echo "systemd-resolved has been reconfigured to free up port 53."
+        else
+            echo "systemd-resolved does not appear to be using port 53."
+        fi
+    fi
+    
+    # Check 2: Check for other services using port 53
+    echo "Checking for other services using port 53..."
+    PORT_USERS=$(ss -tulpn | grep ":53 " | grep -v openvpn)
+    
+    if [[ -n "$PORT_USERS" ]]; then
+        echo "The following services are using port 53:"
+        echo "$PORT_USERS"
+        echo ""
+        echo "Options:"
+        echo "1) Disable these services temporarily"
+        echo "2) Choose a different port for OpenVPN"
+        echo "3) Skip this step (not recommended)"
+        
+        read -rp "Select an option [1-3]: " -e PORT_OPTION
+        case "$PORT_OPTION" in
+            1)
+                echo "Attempting to stop services using port 53..."
+                if ss -tulpn | grep ":53 " | grep "dnsmasq"; then
+                    systemctl stop dnsmasq
+                    systemctl disable dnsmasq
+                    echo "dnsmasq has been stopped and disabled."
+                fi
+                
+                if ss -tulpn | grep ":53 " | grep "named"; then
+                    systemctl stop named
+                    systemctl disable named
+                    echo "named (BIND) has been stopped and disabled."
+                fi
+                
+                # Check again
+                if ss -tulpn | grep ":53 " | grep -v openvpn; then
+                    echo "Warning: There are still services using port 53."
+                    echo "You may need to manually stop these services."
+                else
+                    echo "Port 53 has been successfully freed."
+                fi
+                ;;
+            2)
+                echo "Setting OpenVPN to use a different port..."
+                read -rp "Enter new port [1-65535]: " -e -i 1194 NEW_PORT
+                
+                # Update the port in server.conf
+                sed -i "s/^port .*/port $NEW_PORT/" /etc/openvpn/server.conf
+                
+                # Update iptables rules
+                sed -i "s/--dport $CURRENT_PORT/--dport $NEW_PORT/" /etc/iptables/add-openvpn-rules.sh
+                sed -i "s/--dport $CURRENT_PORT/--dport $NEW_PORT/" /etc/iptables/rm-openvpn-rules.sh
+                
+                # Restart iptables service to apply new rules
+                systemctl restart iptables-openvpn
+                
+                echo "OpenVPN port has been changed to $NEW_PORT."
+                ;;
+            3)
+                echo "Skipping port conflict resolution."
+                ;;
+        esac
+    else
+        echo "No other services detected using port 53."
+    fi
+    
+    # Check 3: Firewall check
+    echo ""
+    echo "Checking firewall rules for port 53..."
+    
+    if command -v ufw >/dev/null; then
+        if ufw status | grep -q "active"; then
+            if ! ufw status | grep -q "53/$CURRENT_PROTO"; then
+                echo "Adding port 53 to UFW firewall rules..."
+                ufw allow 53/$CURRENT_PROTO
+                echo "Port 53/$CURRENT_PROTO has been allowed through UFW."
+            else
+                echo "UFW already has a rule for port 53/$CURRENT_PROTO."
+            fi
+        fi
+    fi
+    
+    if command -v firewall-cmd >/dev/null; then
+        if firewall-cmd --state | grep -q "running"; then
+            if ! firewall-cmd --list-ports | grep -q "53/$CURRENT_PROTO"; then
+                echo "Adding port 53 to firewalld rules..."
+                firewall-cmd --permanent --add-port=53/$CURRENT_PROTO
+                firewall-cmd --reload
+                echo "Port 53/$CURRENT_PROTO has been allowed through firewalld."
+            else
+                echo "Firewalld already has a rule for port 53/$CURRENT_PROTO."
+            fi
+        fi
+    fi
+    
+    # Check 4: SELinux check
+    if command -v sestatus >/dev/null && sestatus | grep -q "enabled"; then
+        echo ""
+        echo "SELinux is enabled on this system."
+        echo "Checking if port 53 is allowed for OpenVPN..."
+        
+        if ! semanage port -l | grep -q "openvpn_port_t.*53"; then
+            echo "Setting SELinux to allow OpenVPN on port 53..."
+            semanage port -a -t openvpn_port_t -p $CURRENT_PROTO 53
+            echo "SELinux has been configured to allow OpenVPN on port 53."
+        else
+            echo "SELinux already allows OpenVPN on port 53."
+        fi
+    fi
+    
+    # Final step: Restart OpenVPN
+    echo ""
+    echo "Restarting OpenVPN service to apply changes..."
+    
+    if [[ -f /etc/fedora-release ]]; then
+        systemctl restart openvpn-server@server
+    elif [[ -f /etc/arch-release ]]; then
+        systemctl restart openvpn-server@server
+    else
+        systemctl restart openvpn@server
+    fi
+    
+    # Verify the service status
+    echo ""
+    echo "Verifying OpenVPN service status..."
+    if [[ -f /etc/fedora-release ]]; then
+        systemctl status openvpn-server@server --no-pager
+    elif [[ -f /etc/arch-release ]]; then
+        systemctl status openvpn-server@server --no-pager
+    else
+        systemctl status openvpn@server --no-pager
+    fi
+    
+    # Check if port is now listening
+    echo ""
+    echo "Checking if port 53 is now listening..."
+    if ss -tulpn | grep -q ":53.*openvpn"; then
+        echo "Success! OpenVPN is now listening on port 53."
+    else
+        echo "Warning: OpenVPN does not appear to be listening on port 53."
+        echo "You may need to further troubleshoot this issue."
+    fi
+    
+    echo ""
+    read -n1 -r -p "Press any key to return to the main menu..."
+    manageMenu
 }
