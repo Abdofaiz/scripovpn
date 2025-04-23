@@ -1191,6 +1191,24 @@ function newClient() {
 	echo ""
 	echo "The configuration file has been written to $homeDir/$CLIENT.ovpn."
 	echo "Download the .ovpn file and import it in your OpenVPN client."
+	
+	# If web download is enabled, copy the file and show direct URL
+	if [ -d "/var/www/openvpn" ]; then
+		cp "$homeDir/$CLIENT.ovpn" /var/www/openvpn/
+		chmod 644 /var/www/openvpn/$CLIENT.ovpn
+		chown www-data:www-data /var/www/openvpn/$CLIENT.ovpn 2>/dev/null || true
+		
+		# Get server IP
+		IP=$(curl -4 -s ifconfig.me || curl -4 -s icanhazip.com || curl -4 -s ipinfo.io/ip || ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v "127.0.0.1" | head -n 1)
+		
+		echo ""
+		echo "====== DIRECT DOWNLOAD LINK ======"
+		echo "URL: http://$IP:81/$CLIENT.ovpn"
+		echo ""
+		echo "Share this URL with your client to download the configuration."
+		echo "They will need the username and password you set when enabling the web server."
+		echo "==================================="
+	fi
 
 	exit 0
 }
@@ -2173,7 +2191,8 @@ EOF
 	echo "Setting up cron job to update .ovpn files..."
 	(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/update-ovpn-web >/dev/null 2>&1") | crontab -
 
-	IP=$(curl -s ifconfig.me)
+	# Get IPv4 address specifically
+	IP=$(curl -4 -s ifconfig.me || curl -4 -s icanhazip.com || curl -4 -s ipinfo.io/ip || ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v "127.0.0.1" | head -n 1)
 	
 	echo ""
 	echo "Web server setup complete!"
