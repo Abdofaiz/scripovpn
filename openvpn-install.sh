@@ -319,21 +319,46 @@ function installQuestions() {
 	echo ""
 	echo "What port do you want OpenVPN to listen to?"
 	echo "   1) Default: 1194"
-	echo "   2) Custom"
-	echo "   3) Random [49152-65535]"
-	until [[ $PORT_CHOICE =~ ^[1-3]$ ]]; do
-		read -rp "Port choice [1-3]: " -e -i 1 PORT_CHOICE
+	echo "   2) Port 53 (DNS - bypasses firewalls)"
+	echo "   3) Custom"
+	echo "   4) Random [49152-65535]"
+	until [[ $PORT_CHOICE =~ ^[1-4]$ ]]; do
+		read -rp "Port choice [1-4]: " -e -i 1 PORT_CHOICE
 	done
 	case $PORT_CHOICE in
 	1)
 		PORT="1194"
 		;;
 	2)
+		# Check if port 53 is already in use
+		if ss -tulpn | grep -q ':53 '; then
+			echo ""
+			echo "WARNING: Port 53 appears to be in use by another process (likely a DNS server)."
+			echo "Using port 53 for OpenVPN might cause conflicts with existing services."
+			echo ""
+			read -rp "Do you still want to use port 53? [y/n]: " -e -i n USE_PORT_53
+			
+			if [[ $USE_PORT_53 =~ ^[yY]$ ]]; then
+				PORT="53"
+				echo "Selected Port: 53 (DNS port)"
+			else
+				echo "Please select another port."
+				PORT_CHOICE="3"  # Default to custom port selection
+				until [[ $PORT =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; do
+					read -rp "Custom port [1-65535]: " -e -i 1194 PORT
+				done
+			fi
+		else
+			PORT="53"
+			echo "Selected Port: 53 (DNS port)"
+		fi
+		;;
+	3)
 		until [[ $PORT =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; do
 			read -rp "Custom port [1-65535]: " -e -i 1194 PORT
 		done
 		;;
-	3)
+	4)
 		# Generate random number within private ports range
 		PORT=$(shuf -i49152-65535 -n1)
 		echo "Random Port: $PORT"
@@ -669,6 +694,22 @@ function installOpenVPN() {
 		CLIENT=${CLIENT:-client}
 		PASS=${PASS:-1}
 		CONTINUE=${CONTINUE:-y}
+
+		# Set PORT based on PORT_CHOICE
+		case $PORT_CHOICE in
+		1)
+			PORT="1194"  # Default port
+			;;
+		2)
+			PORT="53"    # DNS port
+			;;
+		3) 
+			PORT=${PORT:-1194}  # Custom port default
+			;;
+		4)
+			PORT=$(shuf -i49152-65535 -n1)  # Random port
+			;;
+		esac
 
 		if [[ -z $ENDPOINT ]]; then
 			ENDPOINT=$(resolvePublicIP)

@@ -11,6 +11,8 @@ An enhanced version of the OpenVPN installer script with advanced features for W
 - **Enhanced Management**: Detailed client information and statistics
 - **Backup & Restore**: Easy configuration backup and restore
 - **Web Downloads**: Access your .ovpn files via a web browser
+- **Port 53 Support**: Option to run on DNS port for improved firewall bypassing
+- **Route Management**: Easily add and remove routes for internal networks
 
 ## Quick Start
 
@@ -141,6 +143,24 @@ The script provides flexible payload configuration. You can customize any payloa
 
 ### Backup and Restore
 Use option 5 in the main menu to backup or restore your entire OpenVPN configuration.
+
+### Using Port 53 (DNS Port)
+For networks with strict firewall rules, you can run OpenVPN on port 53:
+
+1. During installation, select option 2 when asked for port selection
+2. The script will check if port 53 is already in use (by a DNS server)
+3. If port 53 is available, OpenVPN will be configured to use it
+4. This often helps bypass restrictive firewalls that only allow DNS traffic
+
+Note: Running on port 53 may cause conflicts if you're also running a DNS server. The script includes safety checks to prevent service disruptions.
+
+### Route Management
+The script includes a route management system to allow access to networks behind the VPN:
+
+1. From the main menu, select option 12 (Manage Routes)
+2. You can add or remove routes for internal networks
+3. Changes are applied immediately after restarting the OpenVPN service
+4. Routes can also be viewed through the web interface
 
 ## Troubleshooting
 
