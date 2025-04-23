@@ -10,6 +10,7 @@ An enhanced version of the OpenVPN installer script with advanced features for W
 - **Proxy Support**: HTTP and SOCKS proxy with authentication
 - **Enhanced Management**: Detailed client information and statistics
 - **Backup & Restore**: Easy configuration backup and restore
+- **Web Downloads**: Access your .ovpn files via a web browser
 
 ## Quick Start
 
@@ -39,8 +40,9 @@ The script creates a convenient `faizvpn` command that provides access to the fo
 5. Backup/Restore configuration
 6. Configure Payload settings
 7. Configure Proxy settings
-8. Remove OpenVPN
-9. Exit
+8. Setup Web Download (Port 81)
+9. Remove OpenVPN
+10. Exit
 
 ## Payload Options
 
@@ -86,6 +88,21 @@ See detailed statistics including:
 - Connection time
 - Data usage (upload/download)
 
+## Web Download Server
+
+Access your OpenVPN configuration files through a web browser:
+
+1. Select option 8 from the main menu
+2. The script will set up a web server on port 81
+3. You'll receive a username and password for secure access
+4. Access your .ovpn files at: http://your-server-ip:81
+
+Features:
+- Password protected
+- Automatic updates every 5 minutes
+- Works across all devices with a web browser
+- Simple, user-friendly interface
+
 ## Usage Examples
 
 ### Setting Up WebSocket Payload with HTTP Proxy
@@ -100,6 +117,14 @@ See detailed statistics including:
 8. Enter proxy details
 9. Return to main menu
 10. Select option 1 to create a new client with these settings
+
+### Setting Up Web Download Server
+
+1. Run the `faizvpn` command
+2. Select option 8 (Setup Web Download)
+3. Follow the prompts to create a username and password
+4. Note the URL displayed after setup completes
+5. Access your .ovpn files through any web browser
 
 ### Auto-Installation
 
@@ -124,6 +149,7 @@ If you encounter issues:
 1. Check that the proxy server is accessible
 2. Ensure payload host is correct
 3. Verify client configuration is properly loaded
+4. For web download issues, check if port 81 is open in your firewall
 
 ## Credits
 

@@ -1968,10 +1968,11 @@ function manageMenu() {
 	echo "   5) Backup/Restore configuration"
 	echo "   6) Configure Payload settings"
 	echo "   7) Configure Proxy settings"
-	echo "   8) Remove OpenVPN"
-	echo "   9) Exit"
-	until [[ $MENU_OPTION =~ ^[1-9]$ ]]; do
-		read -rp "Select an option [1-9]: " MENU_OPTION
+	echo "   8) Setup Web Download (Port 81)"
+	echo "   9) Remove OpenVPN"
+	echo "   10) Exit"
+	until [[ $MENU_OPTION =~ ^[1-9]|10$ ]]; do
+		read -rp "Select an option [1-10]: " MENU_OPTION
 	done
 
 	case $MENU_OPTION in
@@ -1997,12 +1998,195 @@ function manageMenu() {
 		configureProxy
 		;;
 	8)
-		removeOpenVPN
+		setupWebDownload
 		;;
 	9)
+		removeOpenVPN
+		;;
+	10)
 		exit 0
 		;;
 	esac
+}
+
+# Function to set up web server for OpenVPN config downloads
+function setupWebDownload() {
+	echo ""
+	echo "Setting up Web Download Server on Port 81"
+	echo "----------------------------------------"
+	echo ""
+	echo "This will install a simple web server to allow downloading .ovpn files"
+	echo "through a web browser using basic authentication."
+	echo ""
+	read -rp "Do you want to continue? [y/n]: " -e -i y CONTINUE
+
+	if [[ "$CONTINUE" != "y" ]]; then
+		echo "Web server setup aborted."
+		return
+	fi
+
+	# Check if nginx is already installed
+	if ! command -v nginx >/dev/null 2>&1; then
+		echo "Installing nginx..."
+		if [[ $OS =~ (debian|ubuntu) ]]; then
+			apt-get update
+			apt-get install -y nginx apache2-utils
+		elif [[ $OS == 'arch' ]]; then
+			pacman -Sy --noconfirm nginx apache
+		elif [[ $OS =~ (centos|amzn|oracle) ]]; then
+			yum install -y nginx httpd-tools
+		elif [[ $OS == 'fedora' ]]; then
+			dnf install -y nginx httpd-tools
+		fi
+	fi
+
+	# Create directory for OpenVPN configs
+	echo "Creating directory for OpenVPN configs..."
+	mkdir -p /var/www/openvpn
+
+	# Setup authentication
+	echo ""
+	echo "Setting up Basic Authentication"
+	echo "------------------------------"
+	read -rp "Enter username for web access: " WEB_USER
+	
+	# Generate password or ask for it
+	if command -v openssl >/dev/null 2>&1; then
+		AUTO_PASS=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)
+		echo "Generated password: $AUTO_PASS"
+		WEB_PASS=$AUTO_PASS
+	else
+		read -rp "Enter password for web access: " WEB_PASS
+	fi
+	
+	# Create htpasswd file
+	if [[ $OS =~ (debian|ubuntu) ]]; then
+		htpasswd -b -c /etc/nginx/.htpasswd "$WEB_USER" "$WEB_PASS"
+	elif [[ $OS == 'arch' ]]; then
+		htpasswd -b -c /etc/nginx/.htpasswd "$WEB_USER" "$WEB_PASS"
+	elif [[ $OS =~ (centos|amzn|oracle|fedora) ]]; then
+		htpasswd -b -c /etc/nginx/.htpasswd "$WEB_USER" "$WEB_PASS"
+	fi
+
+	# Create update script to copy .ovpn files
+	echo "Creating update script..."
+	cat > /usr/local/bin/update-ovpn-web << 'EOF'
+#!/bin/bash
+# Copy all .ovpn files to web directory
+find /root -name "*.ovpn" -exec cp {} /var/www/openvpn/ \;
+find /home -maxdepth 2 -name "*.ovpn" -exec cp {} /var/www/openvpn/ \;
+chown -R www-data:www-data /var/www/openvpn 2>/dev/null || true
+chmod -R 644 /var/www/openvpn/*.ovpn 2>/dev/null || true
+EOF
+
+	chmod +x /usr/local/bin/update-ovpn-web
+	/usr/local/bin/update-ovpn-web
+
+	# Create nginx configuration
+	echo "Configuring nginx..."
+	cat > /etc/nginx/conf.d/openvpn-download.conf << 'EOF'
+server {
+    listen 81;
+    server_name _;
+    
+    root /var/www/openvpn;
+    index index.html;
+    
+    location / {
+        auth_basic "Restricted Access";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_format html;
+        autoindex_localtime on;
+    }
+}
+EOF
+
+	# Create a simple HTML index page
+	echo "Creating index page..."
+	cat > /var/www/openvpn/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OpenVPN Configuration Files</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #3498db;
+        }
+        .instructions {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>OpenVPN Configuration Files</h1>
+    <div class="instructions">
+        <p>Click on a .ovpn file to download it, then import it into your OpenVPN client.</p>
+        <p><strong>Instructions:</strong></p>
+        <ol>
+            <li>Download the .ovpn file for your device</li>
+            <li>Import it into your OpenVPN client</li>
+            <li>Connect to the VPN</li>
+        </ol>
+    </div>
+    <hr>
+    <!-- Directory listing will appear below -->
+</body>
+</html>
+EOF
+
+	# Restart nginx
+	if [[ $OS =~ (debian|ubuntu) ]]; then
+		systemctl restart nginx
+	elif [[ $OS == 'arch' ]]; then
+		systemctl restart nginx
+	elif [[ $OS =~ (centos|amzn|oracle|fedora) ]]; then
+		systemctl restart nginx
+	fi
+
+	# Configure firewall
+	echo "Configuring firewall..."
+	if [[ $OS =~ (debian|ubuntu) ]]; then
+		# Check if ufw is active
+		if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+			ufw allow 81/tcp
+		fi
+	elif [[ $OS =~ (centos|amzn|oracle|fedora) ]]; then
+		# Check if firewalld is active
+		if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state | grep -q "running"; then
+			firewall-cmd --zone=public --add-port=81/tcp --permanent
+			firewall-cmd --reload
+		fi
+	fi
+
+	# Setup cron job to update .ovpn files
+	echo "Setting up cron job to update .ovpn files..."
+	(crontab -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/update-ovpn-web >/dev/null 2>&1") | crontab -
+
+	IP=$(curl -s ifconfig.me)
+	
+	echo ""
+	echo "Web server setup complete!"
+	echo "-----------------------------"
+	echo "URL: http://$IP:81"
+	echo "Username: $WEB_USER"
+	echo "Password: $WEB_PASS"
+	echo ""
+	echo "Your OpenVPN configuration files will be available at this URL."
+	echo "The files are updated every 5 minutes."
+	echo "You can manually update them by running: /usr/local/bin/update-ovpn-web"
+	echo ""
+	read -n1 -r -p "Press any key to continue..."
 }
 
 # Check for root, TUN, OS...
